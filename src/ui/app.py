@@ -601,14 +601,25 @@ def render_export_step():
     # Export options
     st.subheader("Export Options")
 
+    # Export type selection
+    export_type = st.radio(
+        "Export Type",
+        options=["Subtitles Only", "Dubbed Video"],
+        help="Choose whether to export subtitles or create a dubbed video"
+    )
+
     col1, col2 = st.columns(2)
 
     with col1:
-        export_format = st.selectbox(
-            "Subtitle Format",
-            options=["SRT", "ASS"],
-            help="Choose subtitle format"
-        )
+        if export_type == "Subtitles Only":
+            export_format = st.selectbox(
+                "Subtitle Format",
+                options=["SRT", "ASS"],
+                help="Choose subtitle format"
+            )
+        else:
+            st.info("Video will be exported as MP4 with dubbed audio")
+            export_format = "MP4"
 
     with col2:
         output_filename = st.text_input(
@@ -617,8 +628,42 @@ def render_export_step():
             help="Filename without extension"
         )
 
+    # Dubbing options (only for dubbed video)
+    if export_type == "Dubbed Video":
+        st.subheader("Dubbing Options")
+
+        col3, col4 = st.columns(2)
+
+        with col3:
+            ducking_level = st.slider(
+                "Background Audio Level",
+                min_value=0.0,
+                max_value=1.0,
+                value=0.3,
+                step=0.1,
+                help="Volume level of background audio during speech (lower = quieter)"
+            )
+
+        with col4:
+            voice_selection = st.selectbox(
+                "Voice",
+                options=["Auto-select", "Custom"],
+                help="Voice for text-to-speech"
+            )
+
+            if voice_selection == "Custom":
+                custom_voice = st.text_input(
+                    "Voice ID",
+                    value="",
+                    help="Enter Edge-TTS voice ID (e.g., ar-SA-ZariyahNeural)"
+                )
+            else:
+                custom_voice = None
+
     # Export button
-    if st.button("📥 Export Subtitles", use_container_width=True, type="primary"):
+    button_label = "📥 Export Subtitles" if export_type == "Subtitles Only" else "🎬 Create Dubbed Video"
+
+    if st.button(button_label, use_container_width=True, type="primary"):
         # Initialize video processor
         if not st.session_state.video_processor:
             st.session_state.video_processor = VideoProcessor(st.session_state.processing_config)
@@ -637,33 +682,66 @@ def render_export_step():
             output_dir = Path(tempfile.gettempdir()) / "video_translator_output"
             output_dir.mkdir(exist_ok=True)
 
-            extension = export_format.lower()
-            output_path = str(output_dir / f"{output_filename}.{extension}")
+            if export_type == "Subtitles Only":
+                # Export subtitles
+                extension = export_format.lower()
+                output_path = str(output_dir / f"{output_filename}.{extension}")
 
-            # Export subtitles
-            subtitle_path = st.session_state.video_processor.export_subtitles(
-                st.session_state.translation_segments,
-                output_path,
-                export_format.lower(),
-                update_progress
-            )
+                subtitle_path = st.session_state.video_processor.export_subtitles(
+                    st.session_state.translation_segments,
+                    output_path,
+                    export_format.lower(),
+                    update_progress
+                )
 
-            st.session_state.subtitle_path = subtitle_path
-            st.session_state.progress = 1.0
+                st.session_state.subtitle_path = subtitle_path
+                st.session_state.progress = 1.0
 
-            st.success(f"✅ Subtitles exported successfully!")
+                st.success(f"✅ Subtitles exported successfully!")
 
-            # Provide download button
-            with open(subtitle_path, 'r', encoding='utf-8') as f:
-                subtitle_content = f.read()
+                # Provide download button
+                with open(subtitle_path, 'r', encoding='utf-8') as f:
+                    subtitle_content = f.read()
 
-            st.download_button(
-                label=f"⬇️ Download {export_format} Subtitles",
-                data=subtitle_content,
-                file_name=f"{output_filename}.{extension}",
-                mime="text/plain",
-                use_container_width=True
-            )
+                st.download_button(
+                    label=f"⬇️ Download {export_format} Subtitles",
+                    data=subtitle_content,
+                    file_name=f"{output_filename}.{extension}",
+                    mime="text/plain",
+                    use_container_width=True
+                )
+
+            else:
+                # Create dubbed video
+                if not st.session_state.uploaded_file_path:
+                    st.error("Original video file not found. Please start over.")
+                    return
+
+                output_path = str(output_dir / f"{output_filename}.mp4")
+
+                dubbed_path = st.session_state.video_processor.create_dubbed_video(
+                    video_path=st.session_state.uploaded_file_path,
+                    translated_segments=st.session_state.translation_segments,
+                    output_path=output_path,
+                    voice=custom_voice if voice_selection == "Custom" else None,
+                    ducking_level=ducking_level,
+                    progress_callback=update_progress
+                )
+
+                st.session_state.progress = 1.0
+                st.success(f"✅ Dubbed video created successfully!")
+
+                # Provide download button
+                with open(dubbed_path, 'rb') as f:
+                    video_content = f.read()
+
+                st.download_button(
+                    label="⬇️ Download Dubbed Video",
+                    data=video_content,
+                    file_name=f"{output_filename}.mp4",
+                    mime="video/mp4",
+                    use_container_width=True
+                )
 
         except Exception as e:
             st.error(f"❌ Export failed: {str(e)}")

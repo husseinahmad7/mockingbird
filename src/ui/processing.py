@@ -9,6 +9,7 @@ from src.models.core import ProcessingConfig, Segment
 from src.services.asr_service import ASRService
 from src.services.translation_service import TranslationService
 from src.services.subtitle_exporter import SubtitleExporter
+from src.services.dubbing_service import DubbingService
 
 logger = logging.getLogger(__name__)
 
@@ -154,8 +155,61 @@ class VideoProcessor:
                 progress_callback(1.0, f"Subtitles exported to {subtitle_path}")
             
             return subtitle_path
-            
+
         except Exception as e:
             logger.error(f"Subtitle export failed: {e}")
+            raise
+
+    def create_dubbed_video(
+        self,
+        video_path: str,
+        translated_segments: List[Segment],
+        output_path: str,
+        voice: Optional[str] = None,
+        ducking_level: float = 0.3,
+        progress_callback: Optional[Callable[[float, str], None]] = None
+    ) -> str:
+        """Create a dubbed video with translated speech.
+
+        Args:
+            video_path: Path to original video file
+            translated_segments: List of translated segments
+            output_path: Path for output dubbed video
+            voice: Voice to use for TTS (auto-selected if None)
+            ducking_level: Background audio reduction level (0.0-1.0)
+            progress_callback: Optional callback for progress updates (progress, message)
+
+        Returns:
+            Path to dubbed video file
+        """
+        try:
+            if progress_callback:
+                progress_callback(0.05, "Initializing dubbing service...")
+
+            # Initialize dubbing service
+            dubbing_service = DubbingService(self.config)
+
+            # Create progress wrapper to convert callback format
+            def dubbing_progress(message: str, progress: float):
+                if progress_callback:
+                    progress_callback(progress, message)
+
+            # Create dubbed video
+            dubbed_path = dubbing_service.create_dubbed_video(
+                video_path=video_path,
+                translated_segments=translated_segments,
+                output_path=output_path,
+                voice=voice,
+                ducking_level=ducking_level,
+                progress_callback=dubbing_progress
+            )
+
+            # Cleanup
+            dubbing_service.cleanup()
+
+            return dubbed_path
+
+        except Exception as e:
+            logger.error(f"Dubbing failed: {e}")
             raise
 

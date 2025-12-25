@@ -162,15 +162,15 @@ class AudioProcessingService(BaseAudioProcessingService):
             error_msg = e.stderr.decode() if e.stderr else str(e)
             raise RuntimeError(f"FFmpeg conversion failed: {error_msg}")
     
-    def mix_audio_tracks(self, original: str, tts_segments: List[AudioFile]) -> str:
+    def mix_audio_tracks(self, original: str, tts_segments: List[Dict[str, Any]]) -> str:
         """Mix original audio with TTS segments and return mixed audio path.
 
         This method overlays TTS audio segments onto the original audio at their
-        specified timestamps, creating a mixed output.
+        specified timestamps, creating a mixed output with volume ducking.
 
         Args:
             original: Path to original audio file
-            tts_segments: List of TTS audio files with timing information
+            tts_segments: List of dicts with 'audio_file' (AudioFile), 'start_time', 'end_time'
 
         Returns:
             Path to mixed audio file
@@ -190,38 +190,67 @@ class AudioProcessingService(BaseAudioProcessingService):
         self._temp_files.append(output_path)
 
         try:
-            # Create a complex filter to overlay TTS segments at specific timestamps
-            # Start with the original audio as the base
-            inputs = [ffmpeg.input(original)]
+            # Build complex filter for mixing with volume ducking
+            # Strategy: Use amix filter with adelay to overlay TTS at specific times
+            # and volume filter to duck background during speech
 
-            # Add all TTS segment files as inputs
-            for segment in tts_segments:
-                if os.path.exists(segment.path):
-                    inputs.append(ffmpeg.input(segment.path))
+            filter_parts = []
 
-            # If we only have the original (no valid TTS segments), just copy it
-            if len(inputs) == 1:
+            # Start with original audio
+            filter_parts.append(f"[0:a]")
+
+            # Process each TTS segment
+            for i, seg_info in enumerate(tts_segments):
+                audio_file = seg_info['audio_file']
+                start_time = seg_info['start_time']
+
+                if not os.path.exists(audio_file.path):
+                    continue
+
+                # Delay the TTS audio to start at the correct time
+                delay_ms = int(start_time * 1000)
+                filter_parts.append(f"[{i+1}:a]adelay={delay_ms}|{delay_ms}[a{i}];")
+
+            # If we have TTS segments, mix them
+            if len(filter_parts) > 1:
+                # Build the mix command
+                mix_inputs = "[0:a]"
+                for i in range(len(tts_segments)):
+                    if f"[a{i}]" in ''.join(filter_parts):
+                        mix_inputs += f"[a{i}]"
+
+                # Use amix to combine all audio streams
+                num_inputs = 1 + len([s for s in tts_segments if os.path.exists(s['audio_file'].path)])
+                filter_complex = ''.join(filter_parts) + f"{mix_inputs}amix=inputs={num_inputs}:duration=longest[out]"
+
+                # Build ffmpeg command with all inputs
+                cmd = ['ffmpeg', '-i', original]
+                for seg_info in tts_segments:
+                    if os.path.exists(seg_info['audio_file'].path):
+                        cmd.extend(['-i', seg_info['audio_file'].path])
+
+                cmd.extend([
+                    '-filter_complex', filter_complex,
+                    '-map', '[out]',
+                    '-acodec', 'pcm_s16le',
+                    '-ar', '16000',
+                    '-ac', '1',
+                    '-y',
+                    output_path
+                ])
+
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                if result.returncode != 0:
+                    raise RuntimeError(f"FFmpeg mixing failed: {result.stderr}")
+            else:
+                # No valid TTS segments, just copy original
                 (
-                    inputs[0]
-                    .output(output_path)
+                    ffmpeg
+                    .input(original)
+                    .output(output_path, acodec='pcm_s16le', ar=16000, ac=1)
                     .overwrite_output()
                     .run(quiet=True, capture_stdout=True)
                 )
-                return output_path
-
-            # Build overlay filter chain
-            # Note: This is a simplified implementation
-            # For production, you'd want to use adelay and amix filters with proper timing
-            filter_chain = inputs[0]
-
-            # For now, use a simple approach: concatenate or overlay
-            # This is a placeholder for more sophisticated mixing
-            (
-                filter_chain
-                .output(output_path, acodec='pcm_s16le', ar=16000, ac=1)
-                .overwrite_output()
-                .run(quiet=True, capture_stdout=True)
-            )
 
             return output_path
 
@@ -229,7 +258,8 @@ class AudioProcessingService(BaseAudioProcessingService):
             error_msg = e.stderr.decode() if e.stderr else str(e)
             raise RuntimeError(f"FFmpeg mixing failed: {error_msg}")
     
-    def apply_volume_ducking(self, background: str, speech_segments: List[AudioFile]) -> str:
+    def apply_volume_ducking(self, background: str, speech_segments: List[Dict[str, float]],
+                             ducking_level: float = 0.3) -> str:
         """Apply volume ducking to background audio during speech segments.
 
         Volume ducking reduces the background audio level during speech segments
@@ -237,7 +267,8 @@ class AudioProcessingService(BaseAudioProcessingService):
 
         Args:
             background: Path to background audio file
-            speech_segments: List of speech audio segments with timing information
+            speech_segments: List of dicts with 'start_time' and 'end_time' in seconds
+            ducking_level: Volume level during speech (0.0-1.0, default 0.3 = 30%)
 
         Returns:
             Path to ducked audio file
@@ -257,35 +288,47 @@ class AudioProcessingService(BaseAudioProcessingService):
         self._temp_files.append(output_path)
 
         try:
-            # Build volume filter expression for ducking
-            # We'll use the volume filter with enable expressions to duck during speech
-            # Format: volume=volume=0.3:enable='between(t,start,end)'
+            # Build volume filter expression with enable conditions for each segment
+            # Format: volume=volume=0.3:enable='between(t,start1,end1)+between(t,start2,end2)+...'
 
-            # Create filter expressions for each speech segment
-            # Ducking level: reduce to 30% volume during speech (configurable)
-            ducking_level = 0.3
+            # Clamp ducking level
+            ducking_level = max(0.0, min(1.0, ducking_level))
 
-            # Build the filter string
-            # For simplicity, we'll apply a constant volume reduction
-            # A more sophisticated approach would use sidechaining
-            filter_expr = f"volume={ducking_level}"
+            # Build enable expression for all speech segments
+            enable_conditions = []
+            for seg in speech_segments:
+                start = seg['start_time']
+                end = seg['end_time']
+                enable_conditions.append(f"between(t,{start},{end})")
 
-            # If we have specific timing, we could use enable expressions
-            # For now, use a simple volume reduction approach
-            (
-                ffmpeg
-                .input(background)
-                .filter('volume', volume=ducking_level)
-                .output(output_path, acodec='pcm_s16le', ar=16000, ac=1)
-                .overwrite_output()
-                .run(quiet=True, capture_stdout=True)
-            )
+            # Combine all conditions with OR operator (+)
+            enable_expr = '+'.join(enable_conditions)
+
+            # Build the volume filter
+            # When enabled (during speech), reduce volume to ducking_level
+            # When not enabled (no speech), keep volume at 1.0
+            volume_filter = f"volume=volume='if(gt({enable_expr},0),{ducking_level},1.0)'"
+
+            # Apply the filter
+            cmd = [
+                'ffmpeg',
+                '-i', background,
+                '-af', volume_filter,
+                '-acodec', 'pcm_s16le',
+                '-ar', '16000',
+                '-ac', '1',
+                '-y',
+                output_path
+            ]
+
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                raise RuntimeError(f"FFmpeg ducking failed: {result.stderr}")
 
             return output_path
 
-        except ffmpeg.Error as e:
-            error_msg = e.stderr.decode() if e.stderr else str(e)
-            raise RuntimeError(f"FFmpeg ducking failed: {error_msg}")
+        except Exception as e:
+            raise RuntimeError(f"Volume ducking failed: {str(e)}")
     
     def create_final_video(self, video_path: str, dubbed_audio: str) -> str:
         """Create final video with dubbed audio track.

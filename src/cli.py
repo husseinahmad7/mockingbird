@@ -15,6 +15,7 @@ from src.services.error_handler import ErrorHandler
 from src.services.asr_service import ASRService
 from src.services.translation_service import TranslationService
 from src.services.subtitle_exporter import SubtitleExporter
+from src.services.dubbing_service import DubbingService
 from src.models.core import ProcessingConfig, Segment
 
 
@@ -103,31 +104,20 @@ class VideoTranslatorCLI:
             if target_langs and not subtitle_only:
                 logger.info("Step 2/3: Translating segments...")
                 translation_service = TranslationService(config)
-                
+
                 for target_lang in target_langs:
                     logger.info(f"Translating to {target_lang}...")
-                    config.target_language = target_lang
-                    
-                    # Translate segments
-                    translated_segments = []
-                    for segment in segments:
-                        translated_text = translation_service.translate_text(
-                            segment.text,
-                            target_lang
-                        )
-                        translated_segment = Segment(
-                            start_time=segment.start_time,
-                            end_time=segment.end_time,
-                            text=translated_text,
-                            speaker_id=segment.speaker_id,
-                            confidence=segment.confidence
-                        )
-                        translated_segments.append(translated_segment)
+
+                    # Translate segments using the service method
+                    translated_segments = translation_service.translate_segments(
+                        segments,
+                        target_lang
+                    )
                     
                     # Export translated subtitles
                     if not formats:
                         formats = ["srt", "ass"]
-                    
+
                     for fmt in formats:
                         if fmt == "srt":
                             output_file = output_path / f"{base_name}_{target_lang}.srt"
@@ -137,7 +127,37 @@ class VideoTranslatorCLI:
                             output_file = output_path / f"{base_name}_{target_lang}.ass"
                             self.subtitle_exporter.export_ass(translated_segments, str(output_file))
                             logger.info(f"Translated ASS saved: {output_file}")
-            
+
+                    # Step 3: Create dubbed video (if not subtitle-only mode)
+                    if not subtitle_only:
+                        logger.info(f"Step 3/3: Creating dubbed video for {target_lang}...")
+
+                        # Update config for target language
+                        dub_config = ProcessingConfig(
+                            whisper_model_size=whisper_model,
+                            enable_speaker_detection=enable_speaker_detection,
+                            target_language=target_lang
+                        )
+
+                        dubbing_service = DubbingService(dub_config)
+
+                        # Create dubbed video
+                        dubbed_video_path = output_path / f"{base_name}_dubbed_{target_lang}.mp4"
+
+                        try:
+                            dubbing_service.create_dubbed_video(
+                                video_path=validated_path,
+                                translated_segments=translated_segments,
+                                output_path=str(dubbed_video_path),
+                                progress_callback=lambda msg, prog: logger.info(f"{msg} ({prog*100:.0f}%)")
+                            )
+                            logger.info(f"Dubbed video saved: {dubbed_video_path}")
+                        except Exception as e:
+                            logger.error(f"Dubbing failed for {target_lang}: {e}")
+                            logger.info("Continuing with subtitle-only output...")
+                        finally:
+                            dubbing_service.cleanup()
+
             logger.info("Processing complete!")
             return True
             
