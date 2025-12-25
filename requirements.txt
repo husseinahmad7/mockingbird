@@ -1,0 +1,12 @@
+streamlit==1.28.1
+moviepy==1.0.3
+openai-whisper==20231117
+# whisper-timestamped
+googletrans==4.0.0-rc1
+ffmpeg-python==0.2.0
+torch==2.1.0
+torchvision==0.16.0
+torchaudio==2.1.0
+gTTS==2.3.2
+pydub==0.25.1
+moviepy==1.0.3

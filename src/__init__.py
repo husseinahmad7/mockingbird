@@ -1,0 +1,1 @@
+"""Video Translator System - Main package."""

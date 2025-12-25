@@ -1,0 +1,61 @@
+[project]
+name = "video-translator"
+version = "0.1.0"
+description = "Fast, free, and open-source video translation and dubbing service"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "yt-dlp>=2025.12.8",
+    "google-genai>=1.56.0",
+    "transformers>=4.57.3",
+    "sentencepiece>=0.2.1",
+    "protobuf>=6.33.2",
+    "edge-tts>=7.2.7",
+    "ffmpeg-python>=0.2.0",
+    "numpy>=2.4.0",
+    "faster-whisper>=1.2.1",
+    "torch>=2.9.1",
+    "streamlit>=1.52.2",
+    "huggingface-hub[hf-xet]>=0.36.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "hypothesis",
+    "pytest-asyncio",
+    "black",
+    "ruff",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+markers = [
+    "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
+]
+
+[tool.black]
+line-length = 88
+target-version = ['py313']
+
+[tool.ruff]
+target-version = "py313"
+line-length = 88
+
+[dependency-groups]
+dev = [
+    "hypothesis",
+    "pytest",
+    "pytest-asyncio",
+]
