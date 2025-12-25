@@ -9,6 +9,10 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 import sys
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -31,7 +35,9 @@ class SessionState:
             st.session_state.current_job = None
             st.session_state.job_status = JobStatus.PENDING
             st.session_state.uploaded_file_path = None
-            st.session_state.processing_config = ProcessingConfig()
+            st.session_state.processing_config = ProcessingConfig(
+                gemini_api_key=os.getenv("GEMINI_API_KEY", "")
+            )
             st.session_state.transcription_segments = []
             st.session_state.translation_segments = []
             st.session_state.current_step = 'upload'  # upload, transcribe, translate, tts, review, export

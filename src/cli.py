@@ -9,6 +9,8 @@ import logging
 from pathlib import Path
 from typing import Optional, List
 import json
+import os
+from dotenv import load_dotenv
 
 from src.services.file_handler import FileHandler
 from src.services.error_handler import ErrorHandler
@@ -18,6 +20,8 @@ from src.services.subtitle_exporter import SubtitleExporter
 from src.services.dubbing_service import DubbingService
 from src.models.core import ProcessingConfig, Segment
 
+# Load environment variables from .env file
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(
@@ -74,12 +78,13 @@ class VideoTranslatorCLI:
             output_path = Path(output_dir)
             output_path.mkdir(parents=True, exist_ok=True)
             
-            # Create processing config
+            # Create processing config with API keys from environment
             config = ProcessingConfig(
                 whisper_model_size=whisper_model,
-                enable_speaker_detection=enable_speaker_detection
+                enable_speaker_detection=enable_speaker_detection,
+                gemini_api_key=os.getenv("GEMINI_API_KEY", "")
             )
-            
+
             # Step 1: Transcription
             logger.info("Step 1/3: Transcribing audio...")
             asr_service = ASRService(config)
@@ -132,21 +137,15 @@ class VideoTranslatorCLI:
                     if not subtitle_only:
                         logger.info(f"Step 3/3: Creating dubbed video for {target_lang}...")
 
-                        # Update config for target language
-                        dub_config = ProcessingConfig(
-                            whisper_model_size=whisper_model,
-                            enable_speaker_detection=enable_speaker_detection,
-                            target_language=target_lang
-                        )
-
-                        dubbing_service = DubbingService(dub_config)
+                        # Use same config (target language is passed to dubbing service)
+                        dubbing_service = DubbingService(config)
 
                         # Create dubbed video
                         dubbed_video_path = output_path / f"{base_name}_dubbed_{target_lang}.mp4"
 
                         try:
                             dubbing_service.create_dubbed_video(
-                                video_path=validated_path,
+                                video_path=input_path,
                                 translated_segments=translated_segments,
                                 output_path=str(dubbed_video_path),
                                 progress_callback=lambda msg, prog: logger.info(f"{msg} ({prog*100:.0f}%)")

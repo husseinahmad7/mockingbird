@@ -89,23 +89,31 @@ class TranslationService(BaseTranslationService):
         """Fallback translation method using NLLB-200 model."""
         try:
             self._ensure_nllb_loaded()
-            
+
             # Map language codes for NLLB-200
             lang_code = self._get_nllb_language_code(target_language)
-            
+
+            # Get the token ID for the target language
+            # NLLB tokenizer stores language codes in lang_code_to_id attribute
+            if hasattr(self.nllb_tokenizer, 'lang_code_to_id'):
+                forced_bos_token_id = self.nllb_tokenizer.lang_code_to_id.get(lang_code)
+            else:
+                # Fallback: convert the language code token to ID
+                forced_bos_token_id = self.nllb_tokenizer.convert_tokens_to_ids(lang_code)
+
             # Tokenize and translate
             inputs = self.nllb_tokenizer(text, return_tensors="pt", padding=True, truncation=True)
             translated_tokens = self.nllb_model.generate(
                 **inputs,
-                forced_bos_token_id=self.nllb_tokenizer.lang_code_to_id[lang_code],
+                forced_bos_token_id=forced_bos_token_id,
                 max_length=512
             )
-            
+
             # Decode the translation
             translated_text = self.nllb_tokenizer.batch_decode(
                 translated_tokens, skip_special_tokens=True
             )[0]
-            
+
             return translated_text
             
         except Exception as e:
@@ -247,8 +255,9 @@ Input segments:
             logger.info("NLLB-200 model loaded successfully")
     
     def _get_nllb_language_code(self, language: str) -> str:
-        """Map common language names to NLLB-200 language codes."""
+        """Map common language names and codes to NLLB-200 language codes."""
         language_map = {
+            # Full language names
             "spanish": "spa_Latn",
             "french": "fra_Latn",
             "german": "deu_Latn",
@@ -261,13 +270,58 @@ Input segments:
             "arabic": "arb_Arab",
             "hindi": "hin_Deva",
             "english": "eng_Latn",
+            "dutch": "nld_Latn",
+            "polish": "pol_Latn",
+            "turkish": "tur_Latn",
+            "vietnamese": "vie_Latn",
+            "thai": "tha_Thai",
+            "indonesian": "ind_Latn",
+            "czech": "ces_Latn",
+            "greek": "ell_Grek",
+            "hebrew": "heb_Hebr",
+            "ukrainian": "ukr_Cyrl",
+            "romanian": "ron_Latn",
+            "hungarian": "hun_Latn",
+            "swedish": "swe_Latn",
+            "danish": "dan_Latn",
+            "finnish": "fin_Latn",
+            "norwegian": "nob_Latn",
+            # ISO 639-1 language codes
+            "es": "spa_Latn",
+            "fr": "fra_Latn",
+            "de": "deu_Latn",
+            "it": "ita_Latn",
+            "pt": "por_Latn",
+            "ru": "rus_Cyrl",
+            "zh": "zho_Hans",
+            "ja": "jpn_Jpan",
+            "ko": "kor_Hang",
+            "ar": "arb_Arab",
+            "hi": "hin_Deva",
+            "en": "eng_Latn",
+            "nl": "nld_Latn",
+            "pl": "pol_Latn",
+            "tr": "tur_Latn",
+            "vi": "vie_Latn",
+            "th": "tha_Thai",
+            "id": "ind_Latn",
+            "cs": "ces_Latn",
+            "el": "ell_Grek",
+            "he": "heb_Hebr",
+            "uk": "ukr_Cyrl",
+            "ro": "ron_Latn",
+            "hu": "hun_Latn",
+            "sv": "swe_Latn",
+            "da": "dan_Latn",
+            "fi": "fin_Latn",
+            "no": "nob_Latn",
         }
-        
+
         # Try exact match first
         lang_lower = language.lower()
         if lang_lower in language_map:
             return language_map[lang_lower]
-        
+
         # Default to English if not found
         logger.warning(f"Language '{language}' not found in mapping, defaulting to English")
         return "eng_Latn"

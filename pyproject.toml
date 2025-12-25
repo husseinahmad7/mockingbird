@@ -17,6 +17,7 @@ dependencies = [
     "torch>=2.9.1",
     "streamlit>=1.52.2",
     "huggingface-hub[hf-xet]>=0.36.0",
+    "python-dotenv>=1.0.0",
 ]
 
 [project.optional-dependencies]
