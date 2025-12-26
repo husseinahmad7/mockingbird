@@ -190,73 +190,46 @@ class AudioProcessingService(BaseAudioProcessingService):
         self._temp_files.append(output_path)
 
         try:
-            # Build complex filter for mixing with volume ducking
-            # Strategy: Use amix filter with adelay to overlay TTS at specific times
-            # and volume filter to duck background during speech
+            # Use pydub for simpler and more reliable audio mixing
+            # This avoids FFmpeg filter complexity limits
+            from pydub import AudioSegment
 
-            filter_parts = []
+            # Load the background audio
+            background = AudioSegment.from_wav(original)
 
-            # Start with original audio
-            filter_parts.append(f"[0:a]")
-
-            # Process each TTS segment
-            for i, seg_info in enumerate(tts_segments):
+            # Overlay each TTS segment at its timestamp
+            for seg_info in tts_segments:
                 audio_file = seg_info['audio_file']
                 start_time = seg_info['start_time']
 
                 if not os.path.exists(audio_file.path):
                     continue
 
-                # Delay the TTS audio to start at the correct time
-                delay_ms = int(start_time * 1000)
-                filter_parts.append(f"[{i+1}:a]adelay={delay_ms}|{delay_ms}[a{i}];")
+                try:
+                    # Load TTS audio
+                    tts_audio = AudioSegment.from_file(audio_file.path)
 
-            # If we have TTS segments, mix them
-            if len(filter_parts) > 1:
-                # Build the mix command
-                mix_inputs = "[0:a]"
-                for i in range(len(tts_segments)):
-                    if f"[a{i}]" in ''.join(filter_parts):
-                        mix_inputs += f"[a{i}]"
+                    # Convert start time to milliseconds
+                    start_ms = int(start_time * 1000)
 
-                # Use amix to combine all audio streams
-                num_inputs = 1 + len([s for s in tts_segments if os.path.exists(s['audio_file'].path)])
-                filter_complex = ''.join(filter_parts) + f"{mix_inputs}amix=inputs={num_inputs}:duration=longest[out]"
+                    # Overlay TTS on background at the specified time
+                    background = background.overlay(tts_audio, position=start_ms)
 
-                # Build ffmpeg command with all inputs
-                cmd = ['ffmpeg', '-i', original]
-                for seg_info in tts_segments:
-                    if os.path.exists(seg_info['audio_file'].path):
-                        cmd.extend(['-i', seg_info['audio_file'].path])
+                except Exception as e:
+                    logger.warning(f"Failed to overlay TTS segment: {e}")
+                    continue
 
-                cmd.extend([
-                    '-filter_complex', filter_complex,
-                    '-map', '[out]',
-                    '-acodec', 'pcm_s16le',
-                    '-ar', '16000',
-                    '-ac', '1',
-                    '-y',
-                    output_path
-                ])
-
-                result = subprocess.run(cmd, capture_output=True, text=True)
-                if result.returncode != 0:
-                    raise RuntimeError(f"FFmpeg mixing failed: {result.stderr}")
-            else:
-                # No valid TTS segments, just copy original
-                (
-                    ffmpeg
-                    .input(original)
-                    .output(output_path, acodec='pcm_s16le', ar=16000, ac=1)
-                    .overwrite_output()
-                    .run(quiet=True, capture_stdout=True)
-                )
+            # Export the mixed audio
+            background.export(
+                output_path,
+                format='wav',
+                parameters=['-ar', '16000', '-ac', '1', '-acodec', 'pcm_s16le']
+            )
 
             return output_path
 
-        except ffmpeg.Error as e:
-            error_msg = e.stderr.decode() if e.stderr else str(e)
-            raise RuntimeError(f"FFmpeg mixing failed: {error_msg}")
+        except Exception as e:
+            raise RuntimeError(f"Audio mixing failed: {str(e)}")
     
     def apply_volume_ducking(self, background: str, speech_segments: List[Dict[str, float]],
                              ducking_level: float = 0.3) -> str:

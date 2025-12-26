@@ -7,6 +7,7 @@ from typing import List, Dict, Any, Optional, Callable
 
 from ..models.core import Segment, AudioFile, ProcessingConfig
 from .tts_service import TTSService
+from .tts_xtts_service import XTTSService
 from .audio_processing import AudioProcessingService
 
 logger = logging.getLogger(__name__)
@@ -14,15 +15,29 @@ logger = logging.getLogger(__name__)
 
 class DubbingService:
     """Service for creating dubbed videos with TTS and audio mixing."""
-    
-    def __init__(self, config: ProcessingConfig):
+
+    def __init__(self, config: ProcessingConfig, use_voice_cloning: bool = False):
         """Initialize the dubbing service.
-        
+
         Args:
             config: Processing configuration
+            use_voice_cloning: If True, use XTTS for voice cloning; if False, use Edge TTS
         """
         self.config = config
-        self.tts_service = TTSService(config)
+        self.use_voice_cloning = use_voice_cloning
+
+        if use_voice_cloning:
+            try:
+                self.tts_service = XTTSService(config)
+                logger.info("Using XTTS voice cloning for TTS")
+            except ImportError as e:
+                logger.warning(f"XTTS not available: {e}. Falling back to Edge TTS")
+                self.tts_service = TTSService(config)
+                self.use_voice_cloning = False
+        else:
+            self.tts_service = TTSService(config)
+            logger.info("Using Edge TTS for speech synthesis")
+
         self.audio_service = AudioProcessingService()
         
     def create_dubbed_video(
@@ -67,12 +82,34 @@ class DubbingService:
             logger.info(f"Extracting audio from {video_path}")
             original_audio = self.audio_service.extract_audio(video_path)
 
-            # Step 2: Select voice if not provided
+            # Step 2: Setup voice cloning if enabled
+            if self.use_voice_cloning and isinstance(self.tts_service, XTTSService):
+                if progress_callback:
+                    progress_callback("Extracting speaker voice sample...", 0.15)
+
+                # Extract a voice sample from the first segment for cloning
+                if translated_segments:
+                    first_segment = translated_segments[0]
+                    sample_duration = min(5.0, first_segment.end_time - first_segment.start_time)
+
+                    speaker_sample = self.tts_service.extract_speaker_sample(
+                        original_audio,
+                        first_segment.start_time,
+                        sample_duration
+                    )
+
+                    # Set the speaker sample for voice cloning
+                    speaker_id = voice or "speaker_0"
+                    self.tts_service.set_speaker_sample(speaker_id, speaker_sample)
+                    voice = speaker_id
+                    logger.info(f"Voice cloning enabled with sample from {first_segment.start_time}s")
+
+            # Step 3: Select voice if not provided (for Edge TTS)
             if not voice:
                 voice = self._select_voice(target_language)
                 logger.info(f"Auto-selected voice: {voice}")
-            
-            # Step 3: Generate TTS for each segment
+
+            # Step 4: Generate TTS for each segment
             if progress_callback:
                 progress_callback("Generating speech for translated segments...", 0.2)
             

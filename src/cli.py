@@ -49,10 +49,11 @@ class VideoTranslatorCLI:
         whisper_model: str = "small",
         enable_speaker_detection: bool = False,
         subtitle_only: bool = False,
-        formats: List[str] = None
+        formats: List[str] = None,
+        use_voice_cloning: bool = False
     ) -> bool:
         """Process a video file for translation.
-        
+
         Args:
             input_path: Path to input video/audio file
             output_dir: Directory for output files
@@ -62,6 +63,7 @@ class VideoTranslatorCLI:
             enable_speaker_detection: Enable speaker detection
             subtitle_only: Only generate subtitles, no dubbing
             formats: Subtitle formats to export (srt, ass)
+            use_voice_cloning: Use XTTS voice cloning instead of Edge TTS
             
         Returns:
             True if successful, False otherwise
@@ -138,7 +140,7 @@ class VideoTranslatorCLI:
                         logger.info(f"Step 3/3: Creating dubbed video for {target_lang}...")
 
                         # Use same config (target language is passed to dubbing service)
-                        dubbing_service = DubbingService(config)
+                        dubbing_service = DubbingService(config, use_voice_cloning=use_voice_cloning)
 
                         # Create dubbed video
                         dubbed_video_path = output_path / f"{base_name}_dubbed_{target_lang}.mp4"
@@ -241,6 +243,12 @@ Examples:
         help="Generate only subtitles, skip dubbing"
     )
 
+    parser.add_argument(
+        "--voice-cloning",
+        action="store_true",
+        help="Use XTTS voice cloning to preserve original speaker's voice"
+    )
+
     # Export options
     parser.add_argument(
         "-f", "--formats",
@@ -275,7 +283,8 @@ Examples:
         whisper_model=args.model,
         enable_speaker_detection=args.speaker_detection,
         subtitle_only=args.subtitle_only,
-        formats=args.formats
+        formats=args.formats,
+        use_voice_cloning=args.voice_cloning
     )
 
     # Exit with appropriate code
