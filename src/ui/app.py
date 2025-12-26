@@ -12,7 +12,7 @@ import os
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
-load_dotenv()
+load_dotenv(override=True)
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -729,6 +729,7 @@ def render_export_step():
                     video_path=st.session_state.uploaded_file_path,
                     translated_segments=st.session_state.translation_segments,
                     output_path=output_path,
+                    target_language=st.session_state.target_language,
                     voice=custom_voice if voice_selection == "Custom" else None,
                     ducking_level=ducking_level,
                     progress_callback=update_progress

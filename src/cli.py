@@ -21,7 +21,7 @@ from src.services.dubbing_service import DubbingService
 from src.models.core import ProcessingConfig, Segment
 
 # Load environment variables from .env file
-load_dotenv()
+load_dotenv(override=True)
 
 # Configure logging
 logging.basicConfig(
@@ -148,6 +148,7 @@ class VideoTranslatorCLI:
                                 video_path=input_path,
                                 translated_segments=translated_segments,
                                 output_path=str(dubbed_video_path),
+                                target_language=target_lang,
                                 progress_callback=lambda msg, prog: logger.info(f"{msg} ({prog*100:.0f}%)")
                             )
                             logger.info(f"Dubbed video saved: {dubbed_video_path}")

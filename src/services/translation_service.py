@@ -161,7 +161,7 @@ class TranslationService(BaseTranslationService):
 
                 # Make API request using new google.genai API
                 response = self.gemini_client.models.generate_content(
-                    model='gemini-2.0-flash-exp',
+                    model='gemini-2.0-flash-lite',
                     contents=prompt,
                     config=types.GenerateContentConfig(
                         thinking_config=types.ThinkingConfig(thinking_budget=0)

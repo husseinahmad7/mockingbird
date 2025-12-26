@@ -192,7 +192,11 @@ class TTSService(BaseTTSService):
             except Exception as e:
                 logger.warning(f"Failed to clean up temp file {temp_file}: {e}")
         self.temp_files.clear()
-    
+
+    def cleanup(self):
+        """Alias for cleanup_temp_files for consistency."""
+        self.cleanup_temp_files()
+
     def __del__(self):
         """Cleanup on destruction."""
         if hasattr(self, 'temp_files'):

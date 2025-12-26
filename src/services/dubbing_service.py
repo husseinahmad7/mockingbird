@@ -30,44 +30,46 @@ class DubbingService:
         video_path: str,
         translated_segments: List[Segment],
         output_path: str,
+        target_language: str = "en",
         voice: Optional[str] = None,
         ducking_level: float = 0.3,
         progress_callback: Optional[Callable[[str, float], None]] = None
     ) -> str:
         """Create a dubbed video with translated speech.
-        
+
         Args:
             video_path: Path to original video file
             translated_segments: List of translated text segments with timing
             output_path: Path for output dubbed video
+            target_language: Target language code (e.g., 'ar', 'es', 'fr')
             voice: Voice to use for TTS (auto-selected if None)
             ducking_level: Background audio reduction level (0.0-1.0)
             progress_callback: Optional callback for progress updates (message, progress)
-            
+
         Returns:
             Path to dubbed video file
-            
+
         Raises:
             FileNotFoundError: If video file doesn't exist
             RuntimeError: If dubbing fails
         """
         if not os.path.exists(video_path):
             raise FileNotFoundError(f"Video file not found: {video_path}")
-            
+
         if not translated_segments:
             raise ValueError("No translated segments provided")
-        
+
         try:
             # Step 1: Extract original audio
             if progress_callback:
                 progress_callback("Extracting audio from video...", 0.1)
-            
+
             logger.info(f"Extracting audio from {video_path}")
             original_audio = self.audio_service.extract_audio(video_path)
-            
+
             # Step 2: Select voice if not provided
             if not voice:
-                voice = self._select_voice(self.config.target_language)
+                voice = self._select_voice(target_language)
                 logger.info(f"Auto-selected voice: {voice}")
             
             # Step 3: Generate TTS for each segment
