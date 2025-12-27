@@ -12,15 +12,17 @@ dependencies = [
     "protobuf>=6.33.2",
     "edge-tts>=7.2.7",
     "ffmpeg-python>=0.2.0",
-    "numpy>=2.4.0",
+    
+    "numpy<2.4.0",
     "faster-whisper>=1.2.1",
     "torch>=2.8.0",
     "streamlit>=1.52.2",
     "python-dotenv>=1.0.0",
     "pydub>=0.25.1",
     "coqui-tts>=0.27.3",
-    "audio-separator[cpu]>=0.40.0",
+    "audio-separator[cpu]<0.40.0",
     "pyannote.audio>=4.0.3",
+    "librosa<=0.11.0"
 ]
 
 [project.optional-dependencies]

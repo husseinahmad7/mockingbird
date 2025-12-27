@@ -57,15 +57,13 @@ class AudioSeparatorService:
         # Initialize separator if needed
         self._initialize_separator()
         
-        # Use temp directory if output_dir not specified
-        if output_dir is None:
-            output_dir = tempfile.mkdtemp()
+        
         
         try:
             logger.info(f"Separating audio: {audio_path}")
             
             # Perform separation
-            output_files = self.separator.separate(audio_path, output_dir=output_dir)
+            output_files = self.separator.separate(audio_path)#, output_dir=output_dir)
             
             # audio-separator returns [vocals, instrumental]
             if len(output_files) < 2:
