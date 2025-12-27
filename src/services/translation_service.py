@@ -37,17 +37,18 @@ class TranslationService(BaseTranslationService):
         """Initialize the translation service with configuration."""
         self.config = config
         self.gemini_client = None
+        self.gemini_model = config.gemini_model
         self.nllb_model = None
         self.nllb_tokenizer = None
         self.rate_limit_delay = 1.0  # Initial delay in seconds
         self.max_retries = 3
         self.last_request_time = 0.0
-        
+
         # Initialize Gemini API if key is provided
         if config.gemini_api_key and GEMINI_AVAILABLE:
             try:
                 self.gemini_client = genai.Client(api_key=config.gemini_api_key)
-                logger.info("Gemini API client initialized successfully")
+                logger.info(f"Gemini API client initialized successfully with model: {self.gemini_model}")
             except Exception as e:
                 logger.warning(f"Failed to initialize Gemini API: {e}")
                 self.gemini_client = None
@@ -55,7 +56,35 @@ class TranslationService(BaseTranslationService):
             if not GEMINI_AVAILABLE:
                 logger.warning("Google Genai not available - install with: pip install google-genai")
             self.gemini_client = None
-    
+
+    def list_available_models(self) -> List[str]:
+        """List available Gemini models from the API.
+
+        Returns:
+            List of model names that can be used for translation
+        """
+        if not self.gemini_client:
+            logger.warning("Gemini client not initialized. Cannot list models.")
+            return []
+
+        try:
+            models = self.gemini_client.models.list()
+            model_names = [model.name for model in models if 'generateContent' in model.supported_generation_methods]
+            logger.info(f"Available Gemini models: {model_names}")
+            return model_names
+        except Exception as e:
+            logger.error(f"Failed to list models: {e}")
+            return []
+
+    def set_model(self, model_name: str):
+        """Set the Gemini model to use for translation.
+
+        Args:
+            model_name: Name of the model (e.g., 'gemini-2.0-flash-exp', 'gemma-3-27b-it')
+        """
+        self.gemini_model = model_name
+        logger.info(f"Gemini model set to: {model_name}")
+
     def translate_segments(self, segments: List[Segment], target_language: str) -> List[Segment]:
         """Translate a list of segments to the target language."""
         if not segments:
@@ -161,11 +190,8 @@ class TranslationService(BaseTranslationService):
 
                 # Make API request using new google.genai API
                 response = self.gemini_client.models.generate_content(
-                    model='gemini-2.0-flash-lite',
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        thinking_config=types.ThinkingConfig(thinking_budget=0)
-                    )
+                    model=self.gemini_model,
+                    contents=prompt
                 )
 
                 # Parse response

@@ -64,4 +64,6 @@ class ProcessingConfig:
     min_speed_adjustment: float = 0.8
     volume_ducking_level: float = -10.0
     gemini_api_key: str = ""
+    gemini_model: str = "gemma-3-27b-it"  # Default model, can be overridden
     batch_size: int = 20
+    background_preservation_mode: str = "ducking"  # "ducking" or "separator"

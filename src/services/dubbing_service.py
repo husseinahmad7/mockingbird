@@ -9,6 +9,7 @@ from ..models.core import Segment, AudioFile, ProcessingConfig
 from .tts_service import TTSService
 from .tts_xtts_service import XTTSService
 from .audio_processing import AudioProcessingService
+from .audio_separator_service import AudioSeparatorService
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,7 @@ class DubbingService:
             logger.info("Using Edge TTS for speech synthesis")
 
         self.audio_service = AudioProcessingService()
+        self.separator_service = None  # Lazy initialize if needed
         
     def create_dubbed_video(
         self,
@@ -85,24 +87,13 @@ class DubbingService:
             # Step 2: Setup voice cloning if enabled
             if self.use_voice_cloning and isinstance(self.tts_service, XTTSService):
                 if progress_callback:
-                    progress_callback("Extracting speaker voice sample...", 0.15)
+                    progress_callback("Extracting speaker voice samples...", 0.15)
 
-                # Extract a voice sample from the first segment for cloning
-                if translated_segments:
-                    first_segment = translated_segments[0]
-                    sample_duration = min(5.0, first_segment.end_time - first_segment.start_time)
-
-                    speaker_sample = self.tts_service.extract_speaker_sample(
-                        original_audio,
-                        first_segment.start_time,
-                        sample_duration
-                    )
-
-                    # Set the speaker sample for voice cloning
-                    speaker_id = voice or "speaker_0"
-                    self.tts_service.set_speaker_sample(speaker_id, speaker_sample)
-                    voice = speaker_id
-                    logger.info(f"Voice cloning enabled with sample from {first_segment.start_time}s")
+                # Extract voice samples for each unique speaker
+                self._setup_multi_speaker_cloning(
+                    original_audio,
+                    translated_segments
+                )
 
             # Step 3: Select voice if not provided (for Edge TTS)
             if not voice:
@@ -119,26 +110,23 @@ class DubbingService:
                 progress_callback
             )
             
-            # Step 4: Apply volume ducking to original audio
+            # Step 4: Prepare background audio based on preservation mode
             if progress_callback:
-                progress_callback("Applying volume ducking...", 0.6)
-            
-            speech_timings = [
-                {'start_time': seg['start_time'], 'end_time': seg['end_time']}
-                for seg in tts_segments
-            ]
-            ducked_audio = self.audio_service.apply_volume_ducking(
+                progress_callback("Preparing background audio...", 0.6)
+
+            background_audio = self._prepare_background_audio(
                 original_audio,
-                speech_timings,
-                ducking_level
+                tts_segments,
+                ducking_level,
+                progress_callback
             )
-            
-            # Step 5: Mix ducked background with TTS segments
+
+            # Step 5: Mix background with TTS segments
             if progress_callback:
                 progress_callback("Mixing audio tracks...", 0.7)
-            
+
             mixed_audio = self.audio_service.mix_audio_tracks(
-                ducked_audio,
+                background_audio,
                 tts_segments
             )
             
@@ -165,7 +153,112 @@ class DubbingService:
         except Exception as e:
             logger.error(f"Dubbing failed: {str(e)}")
             raise RuntimeError(f"Failed to create dubbed video: {str(e)}")
-    
+
+    def _prepare_background_audio(
+        self,
+        original_audio: str,
+        tts_segments: List[Dict[str, Any]],
+        ducking_level: float,
+        progress_callback: Optional[Callable[[str, float], None]] = None
+    ) -> str:
+        """Prepare background audio based on preservation mode.
+
+        Args:
+            original_audio: Path to original audio file
+            tts_segments: List of TTS segment dictionaries
+            ducking_level: Volume reduction level in dB
+            progress_callback: Optional progress callback
+
+        Returns:
+            Path to prepared background audio file
+        """
+        mode = self.config.background_preservation_mode
+
+        if mode == "separator":
+            # Mode 1: Use audio-separator to extract background only
+            logger.info("Using audio-separator to extract background audio")
+
+            if self.separator_service is None:
+                try:
+                    self.separator_service = AudioSeparatorService()
+                except ImportError as e:
+                    logger.warning(f"Audio separator not available: {e}. Falling back to ducking mode")
+                    mode = "ducking"
+
+            if mode == "separator":
+                try:
+                    # Extract background (instrumental) only
+                    background_audio = self.separator_service.remove_vocals(original_audio)
+                    logger.info(f"Background audio extracted: {background_audio}")
+                    return background_audio
+                except Exception as e:
+                    logger.warning(f"Audio separation failed: {e}. Falling back to ducking mode")
+                    mode = "ducking"
+
+        # Mode 2 (default): Apply volume ducking to entire original audio
+        logger.info("Using volume ducking for background preservation")
+
+        speech_timings = [
+            {'start_time': seg['start_time'], 'end_time': seg['end_time']}
+            for seg in tts_segments
+        ]
+
+        # Reduce volume to 10% (-20dB) during speech
+        ducking_level_db = -20.0  # 10% volume
+        ducked_audio = self.audio_service.apply_volume_ducking(
+            original_audio,
+            speech_timings,
+            ducking_level_db
+        )
+
+        return ducked_audio
+
+    def _setup_multi_speaker_cloning(
+        self,
+        original_audio: str,
+        segments: List[Segment]
+    ):
+        """Setup voice cloning for multiple speakers.
+
+        Args:
+            original_audio: Path to original audio file
+            segments: List of segments with speaker IDs
+        """
+        if not segments:
+            return
+
+        # Find unique speakers and their first occurrence
+        speaker_segments = {}
+        for segment in segments:
+            speaker_id = segment.speaker_id or "speaker_0"
+            if speaker_id not in speaker_segments:
+                speaker_segments[speaker_id] = segment
+
+        logger.info(f"Detected {len(speaker_segments)} unique speaker(s)")
+
+        # Extract voice sample for each speaker
+        for speaker_id, segment in speaker_segments.items():
+            try:
+                # Use up to 5 seconds from the speaker's first segment
+                sample_duration = min(5.0, segment.end_time - segment.start_time)
+
+                # Skip if segment is too short (less than 1 second)
+                if sample_duration < 1.0:
+                    logger.warning(f"Skipping speaker {speaker_id}: segment too short ({sample_duration}s)")
+                    continue
+
+                speaker_sample = self.tts_service.extract_speaker_sample(
+                    original_audio,
+                    segment.start_time,
+                    sample_duration
+                )
+
+                self.tts_service.set_speaker_sample(speaker_id, speaker_sample)
+                logger.info(f"Voice sample extracted for speaker '{speaker_id}' from {segment.start_time}s")
+
+            except Exception as e:
+                logger.warning(f"Failed to extract sample for speaker {speaker_id}: {e}")
+
     def _generate_tts_segments(
         self,
         segments: List[Segment],
@@ -189,20 +282,25 @@ class DubbingService:
             if progress_callback:
                 progress = 0.2 + (0.4 * (i / total))
                 progress_callback(f"Generating speech {i+1}/{total}...", progress)
-            
+
             # Calculate target duration for this segment
             target_duration = segment.end_time - segment.start_time
-            
+
             # Calculate speed adjustment to fit duration
             speed_factor = self.tts_service.calculate_speed_adjustment(
                 segment.text,
                 target_duration
             )
-            
+
+            # Use speaker-specific voice for XTTS, or default voice for Edge TTS
+            segment_voice = voice
+            if self.use_voice_cloning and isinstance(self.tts_service, XTTSService):
+                segment_voice = segment.speaker_id or "speaker_0"
+
             # Generate TTS audio
             audio_file = self.tts_service.generate_speech(
                 segment,
-                voice,
+                segment_voice,
                 speed_factor
             )
             
@@ -239,4 +337,6 @@ class DubbingService:
         """Clean up temporary files."""
         self.tts_service.cleanup()
         self.audio_service.cleanup_temp_files()
+        if self.separator_service is not None:
+            self.separator_service.cleanup()
 

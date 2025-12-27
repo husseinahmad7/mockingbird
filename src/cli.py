@@ -50,7 +50,9 @@ class VideoTranslatorCLI:
         enable_speaker_detection: bool = False,
         subtitle_only: bool = False,
         formats: List[str] = None,
-        use_voice_cloning: bool = False
+        use_voice_cloning: bool = False,
+        background_mode: str = "ducking",
+        gemini_model: str = None
     ) -> bool:
         """Process a video file for translation.
 
@@ -84,7 +86,9 @@ class VideoTranslatorCLI:
             config = ProcessingConfig(
                 whisper_model_size=whisper_model,
                 enable_speaker_detection=enable_speaker_detection,
-                gemini_api_key=os.getenv("GEMINI_API_KEY", "")
+                gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
+                gemini_model=gemini_model or os.getenv("GEMINI_MODEL", "gemini-2.0-flash-exp"),
+                background_preservation_mode=background_mode
             )
 
             # Step 1: Transcription
@@ -249,6 +253,18 @@ Examples:
         help="Use XTTS voice cloning to preserve original speaker's voice"
     )
 
+    parser.add_argument(
+        "--background-mode",
+        choices=["ducking", "separator"],
+        default="ducking",
+        help="Background audio preservation mode: 'ducking' (lower volume to 10%%) or 'separator' (extract vocals/background)"
+    )
+
+    parser.add_argument(
+        "--gemini-model",
+        help="Gemini model to use for translation (e.g., 'gemini-2.0-flash-exp', 'gemma-3-27b-it'). Overrides GEMINI_MODEL env variable"
+    )
+
     # Export options
     parser.add_argument(
         "-f", "--formats",
@@ -284,7 +300,9 @@ Examples:
         enable_speaker_detection=args.speaker_detection,
         subtitle_only=args.subtitle_only,
         formats=args.formats,
-        use_voice_cloning=args.voice_cloning
+        use_voice_cloning=args.voice_cloning,
+        background_mode=args.background_mode,
+        gemini_model=args.gemini_model
     )
 
     # Exit with appropriate code

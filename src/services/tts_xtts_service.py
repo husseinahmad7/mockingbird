@@ -1,16 +1,15 @@
-"""Text-to-Speech service implementation using XTTS-v2 for voice cloning."""
+"""Text-to-Speech service implementation using Coqui XTTS-v2 for voice cloning."""
 
 import os
 import tempfile
 import logging
 from typing import Dict, List, Optional
 import torch
-import torchaudio
 
 try:
-    from TTS.api import TTS
+    from TTS.api import TTS as CoquiTTS
 except ImportError:
-    TTS = None
+    CoquiTTS = None
 
 from .base import BaseTTSService
 from ..models.core import Segment, AudioFile, ProcessingConfig
@@ -21,26 +20,26 @@ logger = logging.getLogger(__name__)
 
 class XTTSService(BaseTTSService):
     """Text-to-Speech service using Coqui XTTS-v2 for voice cloning."""
-    
+
     def __init__(self, config: ProcessingConfig):
         """Initialize XTTS service with configuration."""
-        if TTS is None:
-            raise ImportError("TTS package is required for XTTS functionality. Install with: pip install TTS")
-        
+        if CoquiTTS is None:
+            raise ImportError("Coqui TTS package is required for XTTS functionality. Install with: pip install coqui-tts")
+
         self.config = config
         self.temp_files: List[str] = []
         self.speaker_samples: Dict[str, str] = {}  # speaker_id -> audio sample path
         self.tts_model = None
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        
-        logger.info(f"Initializing XTTS-v2 on device: {self.device}")
-        
+
+        logger.info(f"Initializing Coqui XTTS-v2 on device: {self.device}")
+
     def _load_model(self):
         """Lazy load the XTTS model."""
         if self.tts_model is None:
-            logger.info("Loading XTTS-v2 model...")
-            self.tts_model = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(self.device)
-            logger.info("XTTS-v2 model loaded successfully")
+            logger.info("Loading Coqui XTTS-v2 model...")
+            self.tts_model = CoquiTTS("tts_models/multilingual/multi-dataset/xtts_v2").to(self.device)
+            logger.info("Coqui XTTS-v2 model loaded successfully")
     
     def set_speaker_sample(self, speaker_id: str, audio_path: str):
         """Set a voice sample for a specific speaker for cloning.

@@ -3,7 +3,7 @@ name = "video-translator"
 version = "0.1.0"
 description = "Fast, free, and open-source video translation and dubbing service"
 readme = "README.md"
-requires-python = ">=3.13,<3.14"
+requires-python = ">=3.11,<3.12"
 dependencies = [
     "yt-dlp>=2025.12.8",
     "google-genai>=1.56.0",
@@ -14,12 +14,13 @@ dependencies = [
     "ffmpeg-python>=0.2.0",
     "numpy>=2.4.0",
     "faster-whisper>=1.2.1",
-    "torch>=2.9.1",
+    "torch>=2.8.0",
     "streamlit>=1.52.2",
-    "huggingface-hub[hf-xet]>=0.36.0",
     "python-dotenv>=1.0.0",
     "pydub>=0.25.1",
-    "TTS>=0.22.0",
+    "coqui-tts>=0.27.3",
+    "audio-separator[cpu]>=0.40.0",
+    "pyannote.audio>=4.0.3",
 ]
 
 [project.optional-dependencies]
