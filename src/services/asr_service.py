@@ -110,7 +110,7 @@ class ASRService(BaseASRService):
             
             self.diarization_pipeline = Pipeline.from_pretrained(
                 "pyannote/speaker-diarization-3.1",
-                use_auth_token=use_auth_token
+                token=use_auth_token
             )
             
             # Move to CPU by default to match faster-whisper int8 cpu usage, 
@@ -222,7 +222,14 @@ class ASRService(BaseASRService):
                     
                     logger.info("Running speaker diarization...")
                     # Run the pipeline
-                    diarization = self.diarization_pipeline(audio_path)
+                    diarization_result = self.diarization_pipeline(audio_path)
+                    
+                    # Handle different return types (pyannote.audio 4.x vs older/legacy)
+                    if hasattr(diarization_result, "speaker_diarization"):
+                        diarization = diarization_result.speaker_diarization
+                    else:
+                        diarization = diarization_result
+                        
                     logger.info("Speaker diarization completed")
                 except Exception as e:
                     logger.warning(f"Speaker diarization failed: {e}. Falling back to basic detection.")
