@@ -116,6 +116,8 @@ class ASRService(BaseASRService):
             # Move to CPU by default to match faster-whisper int8 cpu usage, 
             # or CUDA if available since pyannote benefits significantly from GPU
             import torch
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
             if torch.cuda.is_available():
                 self.diarization_pipeline.to(torch.device("cuda"))
                 logger.info("Using CUDA for speaker diarization")
