@@ -14,6 +14,14 @@ except ImportError:
     WhisperModel = None
     WhisperSegment = None
 
+try:
+    from pyannote.audio import Pipeline
+    from pyannote.core import Segment as DiarizationSegment
+except ImportError:
+    Pipeline = None
+    DiarizationSegment = None
+
+
 from .base import BaseASRService
 from ..models.core import Segment, ProcessingConfig
 
@@ -29,6 +37,7 @@ class ASRService(BaseASRService):
         self.config = config
         self.model: Optional[WhisperModel] = None
         self.current_model_size: Optional[str] = None
+        self.diarization_pipeline = None
         
         # Language code mapping for faster-whisper
         self.language_codes = {
@@ -77,6 +86,48 @@ class ASRService(BaseASRService):
         except Exception as e:
             logger.error(f"Failed to load model {model_size}: {e}")
             raise RuntimeError(f"Failed to load ASR model: {e}")
+
+    def load_diarization_pipeline(self) -> None:
+        """Load the speaker diarization pipeline.
+        
+        Raises:
+            RuntimeError: If pyannote.audio is not available or pipeline loading fails
+        """
+        if Pipeline is None:
+            raise RuntimeError("pyannote.audio is not available. Please install it.")
+        
+        if self.diarization_pipeline is not None:
+            return
+            
+        try:
+            logger.info("Loading pyannote.audio pipeline for speaker diarization")
+            
+            # Get token from config or env
+            use_auth_token = self.config.hf_token or os.environ.get("HF_TOKEN")
+            
+            if not use_auth_token:
+                logger.warning("No Hugging Face token provided. Speaker diarization may fail if not already authenticated.")
+            
+            self.diarization_pipeline = Pipeline.from_pretrained(
+                "pyannote/speaker-diarization-3.1",
+                use_auth_token=use_auth_token
+            )
+            
+            # Move to CPU by default to match faster-whisper int8 cpu usage, 
+            # or CUDA if available since pyannote benefits significantly from GPU
+            import torch
+            if torch.cuda.is_available():
+                self.diarization_pipeline.to(torch.device("cuda"))
+                logger.info("Using CUDA for speaker diarization")
+            else:
+                self.diarization_pipeline.to(torch.device("cpu"))
+                logger.info("Using CPU for speaker diarization")
+                
+            logger.info("Successfully loaded speaker diarization pipeline")
+            
+        except Exception as e:
+            logger.error(f"Failed to load diarization pipeline: {e}")
+            raise RuntimeError(f"Failed to load diarization pipeline: {e}")
     
     def detect_language(self, audio_path: str) -> str:
         """Detect the language of the audio file.
@@ -155,24 +206,59 @@ class ASRService(BaseASRService):
                 "word_timestamps": True,
             }
             
-            # Add speaker detection if enabled
-            if self.config.enable_speaker_detection:
-                # Note: faster-whisper doesn't have built-in speaker diarization
-                # This would require additional libraries like pyannote.audio
-                # For now, we'll set speaker_id to None and log a warning
-                logger.warning("Speaker detection requested but not implemented in this version")
-            
+            # Run transcription
             segments, info = self.model.transcribe(audio_path, **transcribe_params)
+            
+            # Convert generator to list immediately
+            whisper_segments = list(segments)
+            logger.info(f"Transcription completed: {len(whisper_segments)} segments")
+            
+            # Speaker diarization
+            diarization = None
+            if self.config.enable_speaker_detection:
+                try:
+                    if self.diarization_pipeline is None:
+                        self.load_diarization_pipeline()
+                    
+                    logger.info("Running speaker diarization...")
+                    # Run the pipeline
+                    diarization = self.diarization_pipeline(audio_path)
+                    logger.info("Speaker diarization completed")
+                except Exception as e:
+                    logger.warning(f"Speaker diarization failed: {e}. Falling back to basic detection.")
             
             # Convert faster-whisper segments to our Segment model
             result_segments = []
             speaker_counter = 0
             
-            for segment in segments:
-                # Simple speaker detection based on silence gaps
-                # This is a basic implementation - real speaker diarization would be more complex
+            for segment in whisper_segments:
                 speaker_id = None
-                if self.config.enable_speaker_detection:
+                
+                if diarization and DiarizationSegment:
+                    # Find the speaker who speaks the most during this segment
+                    try:
+                        dia_segment = DiarizationSegment(segment.start, segment.end)
+                        # Get all speakers during this time
+                        speakers = diarization.crop(dia_segment)
+                        
+                        if speakers:
+                            # Find the label with max duration
+                            speaker_durations = {}
+                            for turn, _, speaker in speakers.itertracks(yield_label=True):
+                                # Calculate overlap
+                                overlap_start = max(turn.start, segment.start)
+                                overlap_end = min(turn.end, segment.end)
+                                duration = max(0, overlap_end - overlap_start)
+                                if duration > 0:
+                                    speaker_durations[speaker] = speaker_durations.get(speaker, 0) + duration
+                            
+                            if speaker_durations:
+                                speaker_id = max(speaker_durations.items(), key=lambda x: x[1])[0]
+                    except Exception as e:
+                        logger.warning(f"Error matching speaker for segment {segment.start}-{segment.end}: {e}")
+                
+                # Fallback to basic detection if diarization was not run or failed
+                if speaker_id is None and self.config.enable_speaker_detection and diarization is None:
                     # Assign speaker based on segment gaps (very basic approach)
                     if len(result_segments) == 0 or (segment.start - result_segments[-1].end_time) > 2.0:
                         speaker_counter += 1

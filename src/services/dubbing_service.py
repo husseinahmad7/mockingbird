@@ -240,7 +240,7 @@ class DubbingService:
         for speaker_id, segment in speaker_segments.items():
             try:
                 # Use up to 5 seconds from the speaker's first segment
-                sample_duration = min(5.0, segment.end_time - segment.start_time)
+                sample_duration = min(6.0, segment.end_time - segment.start_time)
 
                 # Skip if segment is too short (less than 1 second)
                 if sample_duration < 1.0:

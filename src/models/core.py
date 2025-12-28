@@ -67,3 +67,4 @@ class ProcessingConfig:
     gemini_model: str = "gemma-3-27b-it"  # Default model, can be overridden
     batch_size: int = 20
     background_preservation_mode: str = "ducking"  # "ducking" or "separator"
+    hf_token: Optional[str] = None  # Hugging Face token for pyannote.audio
