@@ -68,3 +68,8 @@ class ProcessingConfig:
     batch_size: int = 20
     background_preservation_mode: str = "ducking"  # "ducking" or "separator"
     hf_token: Optional[str] = None  # Hugging Face token for pyannote.audio
+    separation_model: str = "UVR-MDX-NET-Inst_HQ_4.onnx"  # Audio separation model
+    save_separated_audio: bool = False  # Save vocals and background files
+    use_serial_separation: bool = False  # Apply two separation models in series
+    min_speaker_sample_duration: float = 6.0  # Minimum duration for speaker samples in seconds
+    suppress_tf32_warning: bool = True  # Suppress TensorFloat-32 warnings from pyannote

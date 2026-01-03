@@ -41,6 +41,7 @@ class DubbingService:
 
         self.audio_service = AudioProcessingService()
         self.separator_service = None  # Lazy initialize if needed
+        self.original_audio_path = None  # Track for async operations
         
     def create_dubbed_video(
         self,
@@ -83,6 +84,7 @@ class DubbingService:
 
             logger.info(f"Extracting audio from {video_path}")
             original_audio = self.audio_service.extract_audio(video_path)
+            self.original_audio_path = original_audio  # Store for async access
 
             # Step 2: Setup voice cloning if enabled
             if self.use_voice_cloning and isinstance(self.tts_service, XTTSService):
@@ -180,16 +182,42 @@ class DubbingService:
 
             if self.separator_service is None:
                 try:
-                    self.separator_service = AudioSeparatorService()
+                    self.separator_service = AudioSeparatorService(
+                        model_name=self.config.separation_model,
+                        save_files=self.config.save_separated_audio
+                    )
                 except ImportError as e:
                     logger.warning(f"Audio separator not available: {e}. Falling back to ducking mode")
                     mode = "ducking"
 
             if mode == "separator":
                 try:
-                    # Extract background (instrumental) only
-                    background_audio = self.separator_service.remove_vocals(original_audio)
+                    # Use serial separation if configured
+                    if self.config.use_serial_separation:
+                        logger.info("Using serial separation with multiple models")
+                        # Apply two models in series for better quality
+                        models = [
+                            "UVR-MDX-NET-Inst_HQ_3.onnx",
+                            self.config.separation_model
+                        ]
+                        vocals_path, background_audio = self.separator_service.separate_audio_serial(
+                            original_audio,
+                            models=models
+                        )
+                    else:
+                        # Single model separation
+                        background_audio = self.separator_service.remove_vocals(
+                            original_audio,
+                            model_name=self.config.separation_model
+                        )
+
                     logger.info(f"Background audio extracted: {background_audio}")
+
+                    # Log saved files if configured
+                    if self.config.save_separated_audio:
+                        saved_files = self.separator_service.get_saved_files()
+                        logger.info(f"Separated audio files saved: {saved_files}")
+
                     return background_audio
                 except Exception as e:
                     logger.warning(f"Audio separation failed: {e}. Falling back to ducking mode")
@@ -227,37 +255,145 @@ class DubbingService:
         if not segments:
             return
 
-        # Find unique speakers and their first occurrence
-        speaker_segments = {}
+        # Find all segments for each unique speaker
+        speaker_segments_map = {}
         for segment in segments:
             speaker_id = segment.speaker_id or "speaker_0"
-            if speaker_id not in speaker_segments:
-                speaker_segments[speaker_id] = segment
+            if speaker_id not in speaker_segments_map:
+                speaker_segments_map[speaker_id] = []
+            speaker_segments_map[speaker_id].append(segment)
 
-        logger.info(f"Detected {len(speaker_segments)} unique speaker(s)")
+        logger.info(f"Detected {len(speaker_segments_map)} unique speaker(s)")
 
         # Extract voice sample for each speaker
-        for speaker_id, segment in speaker_segments.items():
+        for speaker_id, speaker_segs in speaker_segments_map.items():
             try:
-                # Use up to 5 seconds from the speaker's first segment
-                sample_duration = min(6.0, segment.end_time - segment.start_time)
+                # Get minimum required duration from config
+                min_duration = self.config.min_speaker_sample_duration
 
-                # Skip if segment is too short (less than 1 second)
-                if sample_duration < 1.0:
-                    logger.warning(f"Skipping speaker {speaker_id}: segment too short ({sample_duration}s)")
-                    continue
+                # Try to find a single segment that's long enough
+                suitable_segment = None
+                for seg in speaker_segs:
+                    seg_duration = seg.end_time - seg.start_time
+                    if seg_duration >= min_duration:
+                        suitable_segment = seg
+                        break
 
-                speaker_sample = self.tts_service.extract_speaker_sample(
-                    original_audio,
-                    segment.start_time,
-                    sample_duration
-                )
+                if suitable_segment:
+                    # Use the suitable segment
+                    sample_duration = min(10.0, suitable_segment.end_time - suitable_segment.start_time)
+                    speaker_sample = self.tts_service.extract_speaker_sample(
+                        original_audio,
+                        suitable_segment.start_time,
+                        sample_duration
+                    )
+                    logger.info(f"Voice sample extracted for speaker '{speaker_id}': {sample_duration:.2f}s from single segment")
+                else:
+                    # Combine multiple segments to reach minimum duration
+                    logger.info(f"No single segment long enough for speaker '{speaker_id}', combining segments...")
+                    speaker_sample = self._combine_speaker_segments(
+                        original_audio,
+                        speaker_segs,
+                        min_duration
+                    )
+                    logger.info(f"Voice sample created for speaker '{speaker_id}' by combining {len(speaker_segs)} segments")
 
                 self.tts_service.set_speaker_sample(speaker_id, speaker_sample)
-                logger.info(f"Voice sample extracted for speaker '{speaker_id}' from {segment.start_time}s")
 
             except Exception as e:
                 logger.warning(f"Failed to extract sample for speaker {speaker_id}: {e}")
+                # Continue with other speakers even if one fails
+
+    def _combine_speaker_segments(
+        self,
+        original_audio: str,
+        segments: List[Segment],
+        target_duration: float
+    ) -> str:
+        """Combine multiple speaker segments to create a longer sample.
+
+        Args:
+            original_audio: Path to original audio file
+            segments: List of segments from the same speaker
+            target_duration: Target duration in seconds
+
+        Returns:
+            Path to combined audio sample
+        """
+        import subprocess
+        import tempfile
+
+        # Sort segments by start time
+        sorted_segments = sorted(segments, key=lambda s: s.start_time)
+
+        # Extract individual segments
+        segment_files = []
+        accumulated_duration = 0.0
+
+        for seg in sorted_segments:
+            if accumulated_duration >= target_duration:
+                break
+
+            seg_duration = min(seg.end_time - seg.start_time, target_duration - accumulated_duration)
+
+            # Extract this segment
+            temp_seg = tempfile.NamedTemporaryFile(suffix='.wav', delete=False).name
+            cmd = [
+                'ffmpeg', '-i', original_audio,
+                '-ss', str(seg.start_time),
+                '-t', str(seg_duration),
+                '-ar', '22050',
+                '-ac', '1',
+                '-y', temp_seg
+            ]
+
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode == 0:
+                segment_files.append(temp_seg)
+                accumulated_duration += seg_duration
+
+        if not segment_files:
+            raise RuntimeError("No valid segments found to combine")
+
+        # Concatenate segments using FFmpeg
+        output_path = tempfile.NamedTemporaryFile(suffix='.wav', delete=False).name
+
+        if len(segment_files) == 1:
+            # Just use the single file
+            os.rename(segment_files[0], output_path)
+        else:
+            # Create concat file list
+            concat_file = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False)
+            for seg_file in segment_files:
+                concat_file.write(f"file '{seg_file}'\n")
+            concat_file.close()
+
+            # Concatenate
+            cmd = [
+                'ffmpeg', '-f', 'concat', '-safe', '0',
+                '-i', concat_file.name,
+                '-ar', '22050',
+                '-ac', '1',
+                '-y', output_path
+            ]
+
+            result = subprocess.run(cmd, capture_output=True, text=True)
+
+            # Cleanup
+            os.unlink(concat_file.name)
+            for seg_file in segment_files:
+                if os.path.exists(seg_file):
+                    os.unlink(seg_file)
+
+            if result.returncode != 0:
+                raise RuntimeError(f"Failed to concatenate segments: {result.stderr}")
+
+        # Track for cleanup
+        if isinstance(self.tts_service, XTTSService):
+            self.tts_service.temp_files.append(output_path)
+
+        logger.info(f"Combined {len(segment_files)} segments into {accumulated_duration:.2f}s sample")
+        return output_path
 
     def _generate_tts_segments(
         self,
@@ -266,22 +402,29 @@ class DubbingService:
         progress_callback: Optional[Callable[[str, float], None]] = None
     ) -> List[Dict[str, Any]]:
         """Generate TTS audio for all segments.
-        
+
         Args:
             segments: List of text segments
             voice: Voice to use for TTS
             progress_callback: Optional progress callback
-            
+
         Returns:
             List of dicts with 'audio_file', 'start_time', 'end_time'
         """
         tts_segments = []
         total = len(segments)
-        
+        skipped_count = 0
+
         for i, segment in enumerate(segments):
             if progress_callback:
                 progress = 0.2 + (0.4 * (i / total))
                 progress_callback(f"Generating speech {i+1}/{total}...", progress)
+
+            # Skip empty or whitespace-only segments
+            if not segment.text or not segment.text.strip():
+                logger.warning(f"Skipping segment {i+1}/{total}: empty text")
+                skipped_count += 1
+                continue
 
             # Calculate target duration for this segment
             target_duration = segment.end_time - segment.start_time
@@ -297,19 +440,41 @@ class DubbingService:
             if self.use_voice_cloning and isinstance(self.tts_service, XTTSService):
                 segment_voice = segment.speaker_id or "speaker_0"
 
-            # Generate TTS audio
-            audio_file = self.tts_service.generate_speech(
-                segment,
-                segment_voice,
-                speed_factor
-            )
-            
-            tts_segments.append({
-                'audio_file': audio_file,
-                'start_time': segment.start_time,
-                'end_time': segment.end_time
-            })
-        
+                # Check if speaker sample exists
+                if segment_voice not in self.tts_service.speaker_samples:
+                    logger.warning(f"No voice sample for speaker '{segment_voice}', using default")
+                    segment_voice = "speaker_0"
+
+                    # If even speaker_0 doesn't exist, skip this segment
+                    if segment_voice not in self.tts_service.speaker_samples:
+                        logger.error(f"No voice samples available, skipping segment {i+1}/{total}")
+                        skipped_count += 1
+                        continue
+
+            try:
+                # Generate TTS audio
+                audio_file = self.tts_service.generate_speech(
+                    segment,
+                    segment_voice,
+                    speed_factor
+                )
+
+                tts_segments.append({
+                    'audio_file': audio_file,
+                    'start_time': segment.start_time,
+                    'end_time': segment.end_time
+                })
+            except Exception as e:
+                logger.error(f"Failed to generate speech for segment {i+1}/{total}: {e}")
+                skipped_count += 1
+                continue
+
+        if skipped_count > 0:
+            logger.warning(f"Skipped {skipped_count}/{total} segments due to errors or empty text")
+
+        if not tts_segments:
+            raise RuntimeError("No valid TTS segments were generated. Check that segments have non-empty text and voice samples are set.")
+
         return tts_segments
 
     def _select_voice(self, language: str) -> str:

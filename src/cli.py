@@ -52,6 +52,9 @@ class VideoTranslatorCLI:
         formats: List[str] = None,
         use_voice_cloning: bool = False,
         background_mode: str = "ducking",
+        separation_model: str = "UVR-MDX-NET-Inst_HQ_4.onnx",
+        save_separated: bool = False,
+        serial_separation: bool = False,
         gemini_model: str = None
     ) -> bool:
         """Process a video file for translation.
@@ -66,29 +69,38 @@ class VideoTranslatorCLI:
             subtitle_only: Only generate subtitles, no dubbing
             formats: Subtitle formats to export (srt, ass)
             use_voice_cloning: Use XTTS voice cloning instead of Edge TTS
-            
+            background_mode: Background preservation mode (ducking or separator)
+            separation_model: Audio separation model to use
+            save_separated: Save separated vocals and background files
+            serial_separation: Apply two models in series
+            gemini_model: Gemini model to use for translation
+
         Returns:
             True if successful, False otherwise
         """
         try:
             logger.info(f"Processing video: {input_path}")
-            
+
             # Validate input file
             if not Path(input_path).exists():
                 logger.error(f"Input file not found: {input_path}")
                 return False
-            
+
             # Create output directory
             output_path = Path(output_dir)
             output_path.mkdir(parents=True, exist_ok=True)
-            
+
             # Create processing config with API keys from environment
             config = ProcessingConfig(
                 whisper_model_size=whisper_model,
                 enable_speaker_detection=enable_speaker_detection,
                 gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
                 gemini_model=gemini_model or os.getenv("GEMINI_MODEL", "gemini-2.0-flash-exp"),
-                background_preservation_mode=background_mode
+                background_preservation_mode=background_mode,
+                separation_model=separation_model,
+                save_separated_audio=save_separated,
+                use_serial_separation=serial_separation,
+                hf_token=os.getenv("HF_TOKEN")
             )
 
             # Step 1: Transcription
@@ -261,6 +273,24 @@ Examples:
     )
 
     parser.add_argument(
+        "--separation-model",
+        default="UVR-MDX-NET-Inst_HQ_4.onnx",
+        help="Audio separation model to use (default: UVR-MDX-NET-Inst_HQ_4.onnx)"
+    )
+
+    parser.add_argument(
+        "--save-separated",
+        action="store_true",
+        help="Save separated vocals and background audio files"
+    )
+
+    parser.add_argument(
+        "--serial-separation",
+        action="store_true",
+        help="Apply two separation models in series for better quality (slower)"
+    )
+
+    parser.add_argument(
         "--gemini-model",
         help="Gemini model to use for translation (e.g., 'gemini-2.0-flash-exp', 'gemma-3-27b-it'). Overrides GEMINI_MODEL env variable"
     )
@@ -302,6 +332,9 @@ Examples:
         formats=args.formats,
         use_voice_cloning=args.voice_cloning,
         background_mode=args.background_mode,
+        separation_model=args.separation_model,
+        save_separated=args.save_separated,
+        serial_separation=args.serial_separation,
         gemini_model=args.gemini_model
     )
 
