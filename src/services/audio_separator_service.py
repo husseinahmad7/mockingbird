@@ -45,7 +45,8 @@ class AudioSeparatorService:
             logger.info(f"Initializing audio separator with model: {model_to_load}")
             self.separator = Separator(
                 log_level=logging.INFO,
-                model_file_dir=os.path.join(tempfile.gettempdir(), "audio-separator-models")
+                model_file_dir=os.path.join(tempfile.gettempdir(), "audio-separator-models"),
+                use_autocast=True
             )
             self.separator.load_model(model_filename=model_to_load)
             logger.info("Audio separator initialized successfully")
@@ -91,8 +92,8 @@ class AudioSeparatorService:
             if len(output_files) < 2:
                 raise RuntimeError("Audio separation did not produce expected output files")
 
-            vocals_path = output_files[0]  # Usually ends with (Vocals).wav
-            background_path = output_files[1]  # Usually ends with (Instrumental).wav
+            vocals_path = output_files[1]  # Usually ends with (Vocals).wav
+            background_path = output_files[0]  # Usually ends with (Instrumental).wav
 
             # Handle file tracking based on save_files setting
             if self.save_files:
